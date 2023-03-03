@@ -1,0 +1,12 @@
+/.venv/
+/.idea/
+/sandbox/
+/cache/
+/data/
+/viz_cam/
+/resources/
+/logs/
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints
