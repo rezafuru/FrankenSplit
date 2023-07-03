@@ -1,3 +1,5 @@
+
+
 # FrankenSplit
 Repository for the paper on Saliency Guided Neural Feature Compression with Shallow Variational Bottleneck Injection 
 
@@ -5,7 +7,9 @@ Repository for the paper on Saliency Guided Neural Feature Compression with Shal
 ~~I will push the code in the next 1-2 weeks , the repository I worked on became a mess and an amalgamy of 5 different projects.~~
 
 **Update**: 
-I'll be rather busy the next few weeks, so I've pushed majority of the code for the main experiment, but I've probably broken something in the process. Will make sure to add instructions on how to reproduce the results from the paper, upload some pretrained weights and make sure nothing is broken in the next two weeks
+~~I'll be rather busy the next few weeks, so I've pushed majority of the code for the main experiment, but I've probably broken something in the process. Will make sure to add instructions on how to reproduce the results from the paper, upload some pretrained weights and make sure nothing is broken in the next two weeks~~
+
+Sorry for the delay, a lot of things came up. I postponed uploading weights and making sure everything is easily executable without errors, as I did a Major revision of the paper with some more experiments. I should soon get to cleaning up the local codebase, add some documentation and upload the weights.
 
 ## Short Description
 - Todo
