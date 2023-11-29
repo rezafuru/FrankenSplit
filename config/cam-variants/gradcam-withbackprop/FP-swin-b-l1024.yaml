@@ -1,0 +1,347 @@
+datasets:
+  ilsvrc2012_phas2:
+    name: &dataset_name 'ilsvrc2012'
+    type: 'ImageFolderWithPrecomputedCAMMap'
+    root: &root_dir !join [ '~/resources/datasets/', *dataset_name ]
+    splits:
+      train:
+        dataset_id: &imagenet_train_phase2 !join [ *dataset_name, '/train' ]
+        params:
+          root: !join [*root_dir, '/train']
+          root_cam_map: !join [*root_dir, '/saliency_maps/xgradcameigensmoothedguidedbackprop28x28/train']
+          map_wtih_sample: True
+          transform_params:
+            - type: 'Resize'
+              params:
+                size: [256, 256]
+            - type: 'CenterCrop'
+              params:
+                size: &input_size [224, 224]
+            - &totensor
+              type: 'ToTensor'
+              params:
+            - &normalize
+              type: 'Normalize'
+              params:
+                mean: [ 0.485, 0.456, 0.406 ]
+                std: [ 0.229, 0.224, 0.225 ]
+  ilsvrc2012_phase1:
+    name: *dataset_name
+    type: 'ImageFolder'
+    root: &root_dir_st2 !join [ '~/resources/datasets/', *dataset_name]
+    splits:
+      train:
+        dataset_id: &imagenet_train_phase1 !join [ *dataset_name, 'stage2', '/train' ]
+        params:
+          root: !join [ *root_dir_st2, '/train' ]
+          transform_params:
+            - type: 'RandomResizedCrop'
+              params:
+                size: *input_size
+            - type: 'RandomHorizontalFlip'
+              params:
+                p: 0.5
+            - *totensor
+            - *normalize
+  ilsvrc2012_val:
+    name: *dataset_name
+    type: 'ImageFolder'
+    splits:
+      val:
+        dataset_id: &imagenet_val !join [ *dataset_name, '/val' ]
+        params:
+          root: &valdir !join [*root_dir, '/val']
+          transform_params:
+            - type: 'Resize'
+              params:
+                size: 256
+            - type: 'CenterCrop'
+              params:
+                size: *input_size
+            - *totensor
+            - *normalize
+#datasets:
+#  tinyimagenet200:
+#    name: &dataset_name 'tiny-imagenet-200'
+#    type: 'ImageFolder'
+#    root: &root_dir !join [ './resources/dataset/', *dataset_name ]
+#    splits:
+#      train:
+#        dataset_id: &tinyimagenet200_train !join [ *dataset_name, '/train' ]
+#        params:
+#          root: !join [*root_dir, '/train']
+#          transform_params:
+#            - type: 'RandomHorizontalFlip'
+#              params:
+#                p: 0.5
+#            - type: 'ToTensor'
+#              params:
+#            - &normalize
+#              type: 'Normalize'
+#              params:
+#                mean: [0.4914, 0.4822, 0.4465]
+#                std: [0.2023, 0.1994, 0.2010]
+#            - &resize
+#              type: 'WrappedResize'
+#              params:
+#                size: &input_size [224, 224]
+#                interpolation: 'bicubic'
+#      val:
+#        dataset_id: &tinyimagenet200_val !join [ *dataset_name, '/val' ]
+#        params:
+#          root: &valdir !join [*root_dir, '/val']
+#          transform_params: &val_transform
+#            - type: 'ToTensor'
+#              params:
+#            - *normalize
+#            - *resize
+#      test:
+#        dataset_id: &tinyimagenet200_test !join [ *dataset_name, '/test' ]
+#        params:
+#          root: *valdir
+#          transform_params: *val_transform
+models:
+  lmbda: &lmbda 1.024
+  distortion: &distortion 'XGradCAMEigensmoothed'
+  teacher_model:
+    name: &teacher_model_name 'get_timm_model'
+    params:
+      swin_base: &backbone_base 'swin_s3_base_224'
+      no_classes: 1000
+      reset_head: False
+      pretrained: True
+      assign_layer_names: False
+      split_idx: -1
+    experiment: !join [*dataset_name, '-', *teacher_model_name]
+    ckpt: 'skip (loaded from timm)'
+  student_model:
+    name: 'splittable_network_with_compressor'
+    params:
+      network_type: 'SplittableClassifierWithCompressionModule'
+      analysis_config:
+        analyze_after_compress: True
+        analyzers_config:
+          - type: 'DiskFileSizeAndBppAnalyzer'
+            params:
+              unit: 'KB'
+      compression_module_config:
+        name: 'FactorizedPriorModuleWithPrecomputedCamLearnedEB'
+        params:
+          entropy_bottleneck_channels: &output_dim_analysis 48
+          entropy_bottleneck_channels_cam: 1
+          return_map: False
+          min_val: 0.0
+          return_map_features: True
+          apply_cam_features: False
+          quantization_config:
+            backend: 'fbgemm'
+            quant_device: 'cpu'
+          analysis_config:
+            name: &analysis 'QuantizableSimpleAnalysisNetwork2'
+            params:
+                in_ch1: 48
+                in_ch2: 64
+                target_channels: *output_dim_analysis
+          synthesis_config:
+            name: &synthesis 'SynthesisNetworkCNNSwinHybridNoFinalLayer'
+            params:
+              deconv_preconfig:
+                name: '_0x2upsample2x1stride_deconv_1stage_norb_nogdn'
+                params:
+                  feature_size: 28
+                  bottleneck_channels: *output_dim_analysis
+                  output_dim_st1: 96
+                  target_dim: 192
+              feature_size: 28
+              window_sizes: [7]
+              num_heads: [3]
+              depths: [2]
+              stoch_drop_rate: 0.05
+              use_shortcut: True
+              use_fixed_shortcut: False
+      backbone_module_config:
+        name: *teacher_model_name
+        params:
+          swin_base: *backbone_base
+          pretrained: True
+          no_classes: 1000
+          # replace first two stages with synthesis/analysis
+          split_idx: 2
+          assign_layer_names: False
+          skip_embed: True
+          reset_head: False
+      reconstruction_layer_config:
+        name: 'SwinReconLayer'
+        params:
+          embed_dim: 192
+          target_dim: 384
+          window_size: 7
+          feature_size: 28
+          depth: 2
+          num_heads: 4
+          tokenize_input: True
+    experiment: &experiment_name !join [*analysis, '-', *synthesis, '-', *lmbda, '-', *distortion, '-', *backbone_base]
+    ckpt: !join [ 'resources/weights/release/cam-variants/xgradcam+backprop/FP_swin-b_l=', *lmbda, '.pt' ]
+    ckpt_stage1: !join ['resources/weights/', *dataset_name, '/checkpoint',*experiment_name, '-stage1.pt']
+train:
+  log_freq: 20000
+  epoch_to_update: &epoch_to_update 15
+  stage1:
+    eval_metrics: [ 'accuracy', 'bpp' ]
+    num_epochs: 2
+    train_data_loader:
+      dataset_id: *imagenet_train_phase1
+      random_sample: True
+      batch_size: 16
+      num_workers: 8
+      cache_output:
+    val_data_loader:
+      dataset_id: *imagenet_val
+      random_sample: False
+      batch_size: 128
+      num_workers: 8
+    teacher:
+      sequential: [ 'patch_embed', 'pos_drop', 'layers.0', 'layers.1']
+      frozen_modules: [ ]
+      forward_hook:
+        input: [ ]
+        output: [ 'layers.1' ]
+#      wrapper: 'DistributedDataParallel'
+      requires_grad: False
+    student:
+      sequential: [ 'compression_module' ]
+      frozen_modules: [ 'backbone' ]
+      forward_hook:
+        input: [ ]
+        output: [ 'compression_module', 'compression_module.entropy_bottleneck' ]
+      requires_grad: True
+#      wrapper: 'DistributedDataParallel'
+    enable_mp: False
+    optimizer:
+      type: 'Adam'
+      params:
+        lr: 0.001
+      module_wise_params: [
+        { params: { lr: 0.001 }, module: 'compression_module' },
+      ]
+    scheduler:
+      type: 'ExponentialLR'
+      params:
+        # decay_factor = 1000
+        # gamma = (1 / decay_factor) ** (1 / epochs)
+        # lr last epoch = 1e-6
+        gamma: 0.61054023
+    criterion:
+      type: 'GeneralizedCustomLoss'
+      org_term:
+        factor: 0.0
+      sub_terms:
+        layer1:
+          criterion:
+            type: 'MSELoss'
+            params:
+              reduction: 'sum'
+          params:
+            input:
+              is_from_teacher: False
+              module_path: 'compression_module'
+              io: 'output'
+            target:
+              is_from_teacher: True
+              module_path: 'layers.1'
+              io: 'output'
+          factor: 1.0
+        bpp:
+          criterion:
+            type: 'BppLossOrig'
+            params:
+              input_sizes: *input_size
+              entropy_module_path: 'compression_module.entropy_bottleneck'
+              reduction: 'sum'
+          factor: *lmbda
+  stage2:
+    eval_metrics: [ 'accuracy', 'bpp' ]
+    num_epochs: 13
+    train_data_loader:
+      dataset_id: *imagenet_train_phase2
+      random_sample: True
+      batch_size: 8
+      num_workers: 8
+      cache_output:
+    val_data_loader:
+      dataset_id: *imagenet_val
+      random_sample: False
+      batch_size: 128
+      num_workers: 8
+    teacher:
+      sequential: [ 'patch_embed', 'pos_drop', 'layers.0', 'layers.1']
+      frozen_modules: [ ]
+      forward_hook:
+        input: [ ]
+        output: [ 'layers.1' ]
+#      wrapper: 'DistributedDataParallel'
+      requires_grad: False
+    student:
+      sequential: [ 'compression_module' ]
+      frozen_modules: [ 'backbone' ]
+      forward_hook:
+        input: [ ]
+        output: [ 'compression_module', 'compression_module.entropy_bottleneck', 'compression_module.eb_cam' ]
+      requires_grad: True
+#      wrapper: 'DistributedDataParallel'
+    enable_mp: False
+    optimizer:
+      type: 'Adam'
+      params:
+        lr: 0.0004
+      module_wise_params: [
+        { params: { lr: 0.0004 }, module: 'compression_module' },
+      ]
+    scheduler:
+      type: 'ExponentialLR'
+      params:
+        # decay_factor = 1000
+        # gamma = (1 / decay_factor) ** (1 / epochs)
+        # lr last epoch = 1e-6
+        gamma: 0.61054023
+    criterion:
+      type: 'GeneralizedCustomLoss'
+      org_term:
+        factor: 0.0
+      sub_terms:
+        layer1:
+          criterion:
+            type: 'MSELossWithPrecomputedCAMMapSingle'
+            params:
+              strategy: 'mult_avg'
+              tokenize: True
+              interpol_to: [14, 14]
+          params:
+            input:
+              is_from_teacher: False
+              module_path: 'compression_module'
+              io: 'output'
+            target:
+              is_from_teacher: True
+              module_path: 'layers.1'
+              io: 'output'
+          factor: 1.0
+        bpp:
+          criterion:
+            type: 'BppLossOrigWithCAMEBPixelwiseSingleCH'
+            params:
+              input_sizes: *input_size
+              entropy_module_path: 'compression_module.entropy_bottleneck'
+              cam_entropy_module_path: 'compression_module.eb_cam'
+              reduction: 'sum'
+              op: 'add'
+          factor: *lmbda
+
+test:
+  eval_metrics: [ 'accuracy-and-filesize']
+#  eval_metrics: [ 'psnr' ]
+  test_data_loader:
+    dataset_id: *imagenet_val
+    random_sample: False
+    batch_size: 1
+    num_workers: 1

@@ -134,11 +134,15 @@ class TimmResnetWrapper(nn.Module):
         self.stem = nn.Identity() if prune_stem else nn.Sequential(orig.conv1,
                                                                    orig.bn1,
                                                                    orig.act1,
-                                                                   orig.maxpool)
-        self.layers = nn.Sequential(orig.layer1,
-                                    orig.layer2,
-                                    orig.layer3,
-                                    orig.layer4)
+                                                                     orig.maxpool)
+        self.layer1 = orig.layer1
+        self.layer2 = orig.layer2
+        self.layer3 = orig.layer3
+        self.layer4 = orig.layer4
+        self.layers = nn.Sequential(self.layer1,
+                                    self.layer2,
+                                    self.layer3,
+                                    self.layer4)
         self.global_pool = orig.global_pool
         self.fc = orig.fc
 
@@ -162,7 +166,7 @@ def _load_custom_weights(timm_model, weights_path):
 
 
 @register_model_func
-def get_timm_model(model_name,
+def get_timm_model(timm_model_name,
                    no_classes=1000,
                    reset_head=False,
                    pretrained=True,
@@ -173,38 +177,38 @@ def get_timm_model(model_name,
                    prune_tail=False,
                    features_only=False):
     # Peak performance after 5-6+ years of CS education right there
-    logger.info(f"Creating {model_name} timm model...")
+    logger.info(f"Creating {timm_model_name} timm model...")
     if pretrained and not weights_path:
         logger.info("Loading pretrained weights from timm")
-        model = timm.create_model(model_name, pretrained=True)
+        model = timm.create_model(timm_model_name, pretrained=True)
     elif pretrained and weights_path:
         logger.info(f"Loading pretrained weights from: {weights_path}")
-        model = timm.create_model(model_name, pretrained=False)
+        model = timm.create_model(timm_model_name, pretrained=False)
         if no_classes != 1000:
             model.reset_classifier(num_classes=no_classes)
         _load_custom_weights(timm_model=model, weights_path=weights_path)
     else:
-        model = timm.create_model(model_name, pretrained=False)
-    if "resnet" in model_name:
+        model = timm.create_model(timm_model_name, pretrained=False)
+    if "resnet" in timm_model_name:
         model = TimmResnetWrapper(model, prune_stem=skip_embed)
     if reset_head and not weights_path:
         logger.info(f"Creating new head with {no_classes} classes")
         model.reset_classifier(num_classes=no_classes)
     if split_idx != -1:
-        logger.info(f"Splitting {model_name} at stage {split_idx}")
+        logger.info(f"Splitting {timm_model_name} at stage {split_idx}")
         if prune_tail:
             model.layers = model.layers[:split_idx]
             model.head = nn.Identity()
             model.norm = nn.Identity()
             model.forward_head = lambda x: x
         else:
-            if "convnext" in model_name:
+            if "convnext" in timm_model_name:
                 model.stages = model.stages[split_idx:]
             else:
                 model.layers = model.layers[split_idx:]
     if skip_embed:
         logger.info("Replacing patch embed with identity function")
-        if "convnext" in model_name:
+        if "convnext" in timm_model_name:
             model.stem = nn.Identity()
         else:
             model.patch_embed = nn.Identity()

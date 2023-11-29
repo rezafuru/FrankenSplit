@@ -1,6 +1,11 @@
 import argparse
 import os
+import sys
 from typing import Any, Tuple
+
+import timm
+
+from saliency_maps.cam_prep.cam_patch import apply_cam_patches, apply_multires_patches
 from timm.models.layers import to_2tuple
 import torch
 import torch.cuda
@@ -8,25 +13,28 @@ import numpy as np
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from torch.utils.data import DataLoader
 from torchdistill.common.constant import def_logger
-from pytorch_grad_cam import EigenCAM, ScoreCAM, XGradCAM, FullGrad, GradCAMPlusPlus, AblationCAM, \
-    GuidedBackpropReLUModel
+from pytorch_grad_cam import (
+    EigenCAM,
+    ScoreCAM,
+    XGradCAM,
+    FullGrad,
+    GradCAMPlusPlus,
+    AblationCAM,
+    GuidedBackpropReLUModel,
+)
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
 from torchvision.transforms import CenterCrop, Resize
 from pathlib import Path
 
-from saliency_maps.cam_prep.cam_patch import apply_cam_patches, apply_multires_patches
 from misc.util import mkdir
 from model.modules.timm_models import get_timm_model
 from tqdm import tqdm
 
 logger = def_logger.getChild(__name__)
 
-# TODO: 1) Patch to not use numpy at all during generation,
-#       2) Multires with projection
 
 assert torch.cuda.is_available(), "Cuda not available"
-torch.cuda.empty_cache()
 global ilsrvc
 
 SALIENCY_TYPES = {
@@ -36,15 +44,15 @@ SALIENCY_TYPES = {
     "AblationCAM": AblationCAM,
     "GuidedBackpropReLUModel": GuidedBackpropReLUModel,
     "ScoreCAM": ScoreCAM,
-    "EigenCAM": EigenCAM
+    "EigenCAM": EigenCAM,
 }
 
 
 class ImageFolderReturningClassFolder(ImageFolder):
     """
-        Wrapper for DatasetFolder to return the class folder
-        Needed to create the same folder structure for the saliency maps,
-        so when sampling we can load images with their corresponding heatmap
+    Wrapper for DatasetFolder to return the class folder
+    Needed to create the same folder structure for the saliency maps,
+    so when sampling we can load images with their corresponding heatmap
     """
 
     def __getitem__(self, index: int) -> Tuple[Any, Any]:
@@ -70,17 +78,32 @@ class ImageFolderReturningClassFolder(ImageFolder):
 
 
 def reshape_transform(tensor, height=7, width=7):
-    if tensor[0].shape == (3136, 96) or tensor[0].shape == (3136, 96, 16) or tensor[0].shape == (3136, 192):
+    if (
+        tensor[0].shape == (3136, 96)
+        or tensor[0].shape == (3136, 96, 16)
+        or tensor[0].shape == (3136, 192)
+    ):
         height, width = (56, 56)
-    elif (tensor[0].shape == (784, 192)) or (tensor[0].shape == (784, 192, 16)) or tensor[0].shape == (784, 384):
+    elif (
+        (tensor[0].shape == (784, 192))
+        or (tensor[0].shape == (784, 192, 16))
+        or tensor[0].shape == (784, 384)
+    ):
         height, width = (28, 28)
-    elif tensor[0].shape == (196, 384) or tensor[0].shape == (196, 384, 16) or tensor[0].shape == (196, 768):
+    elif (
+        tensor[0].shape == (196, 384)
+        or tensor[0].shape == (196, 384, 16)
+        or tensor[0].shape == (196, 768)
+    ):
         height, width = (14, 14)
-    elif tensor[0].shape == (49, 768) or tensor[0].shape == (49, 768, 16) or tensor[0].shape == (49, 1536):
+    elif (
+        tensor[0].shape == (49, 768)
+        or tensor[0].shape == (49, 768, 16)
+        or tensor[0].shape == (49, 1536)
+    ):
         height, width = (7, 7)
 
-    result = tensor.reshape(tensor.size(0),
-                            height, width, tensor.size(2))
+    result = tensor.reshape(tensor.size(0), height, width, tensor.size(2))
 
     result = result.transpose(2, 3).transpose(1, 2)
     return result
@@ -95,29 +118,30 @@ def generate_score_cam_attn_maps(args):
     assert not multires or (args.patch_cam and not args.include_first)
     device = args.device
 
-    model = get_timm_model(args.model,
-                           pretrained=True,
-                           no_classes=no_classes,
-                           assign_layer_names=False,
-                           split_idx=-1,
-                           weights_path=weights_path)
+    model = get_timm_model(
+        args.model,
+        pretrained=False,
+        no_classes=no_classes,
+        assign_layer_names=False,
+        split_idx=-1,
+        weights_path=weights_path,
+    )
     # todo: pass transforms as config
-    transform_list = transforms.Compose([
-        Resize(size=[256, 256]),
-        CenterCrop(size=[224, 224]),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225])
-    ])
-    logger.info("Applying ilsvrc norm")
+    transform_list = transforms.Compose(
+        [
+            Resize(size=[256, 256]),
+            CenterCrop(size=[224, 224]),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
     dataset = ImageFolderReturningClassFolder(
         root=args.input,
         transform=transform_list,
     )
-    loader = DataLoader(dataset=dataset,
-                        batch_size=args.batch_size,
-                        shuffle=False,
-                        num_workers=2)
+    loader = DataLoader(
+        dataset=dataset, batch_size=args.batch_size, shuffle=False, num_workers=2
+    )
     model.to(device)
     root_output = args.output
     layers_output_path = []
@@ -132,10 +156,27 @@ def generate_score_cam_attn_maps(args):
     # todo: pass as config to not manually change layer selection for different model families
     if args.mix_layers:
         # swin transformer layer selection
-        target_layers = [
-            model.layers[1].blocks[-1].norm1,
-            model.layers[2].blocks[-1].norm1,
-            model.layers[3].blocks[-1].norm1]
+        if "swin" in args.model:
+            target_layers = [
+                model.layers[1].blocks[-1].norm1,
+                model.layers[2].blocks[-1].norm1,
+                model.layers[3].blocks[-1].norm1,
+            ]
+        elif "convnext" in args.model:
+            target_layers = [
+                model.stages[1].blocks[-1].norm,
+                model.stages[2].blocks[-1].norm,
+                model.stages[3].blocks[-1].norm,
+            ]
+        elif "resnet" in args.model:
+            target_layers = [
+                model.layer1[-1],
+                model.layer2[-1],
+                model.layer3[-1],
+            ]
+        else:
+            logger.warning(f"Layer selection for {args.model} not implemented")
+            sys.exit(1)
         if args.include_first:
             target_layers = [model.layers[0].blocks[-1].norm1] + target_layers
             logger.info(f"Including first layer..")
@@ -145,13 +186,14 @@ def generate_score_cam_attn_maps(args):
     logger.info(f"total target layers: {len(target_layers)}")
     cam_init = SALIENCY_TYPES[args.saliency_type]
 
-    cam = cam_init(model=model,
-                   target_layers=target_layers,
-                   use_cuda=True,
-                   reshape_transform=reshape_transform,
-                   device=device)
+    cam = cam_init(
+        model=model,
+        target_layers=target_layers,
+        reshape_transform=reshape_transform if "swin" in args.model else None,
+        device=device,
+    )
     if isinstance(cam_init, ScoreCAM) or isinstance(cam_init, AblationCAM):
-        cam_init.batch_size = 128
+        cam_init.batch_size = args.batch_size
     if args.patch_cam:
         if multires:
             cam = apply_multires_patches(cam)
@@ -171,8 +213,13 @@ def generate_score_cam_attn_maps(args):
         samples.to(device)
         labels.to(device)
         targets = [ClassifierOutputTarget(label.item()) for label in labels]
-        grayscale_cams = cam(input_tensor=torch.autograd.Variable(samples.detach().clone(), requires_grad=True),
-                             targets=targets, eigen_smooth=args.eigen_smooth)
+        grayscale_cams = cam(
+            input_tensor=torch.autograd.Variable(
+                samples.detach().clone(), requires_grad=True
+            ),
+            targets=targets,
+            eigen_smooth=args.eigen_smooth,
+        )
         if multires:
             for layer_idx, layer_output_path in enumerate(layers_output_path):
                 layer_cams = grayscale_cams[layer_idx]
@@ -187,19 +234,19 @@ def generate_score_cam_attn_maps(args):
                 res_cams = grayscale_cams[idx]
                 output_file_path = os.path.join(output_path, img_names[idx])
                 if np.isnan(res_cams.sum()):
-                    logger.warning(f"Img {output_file_path} has NaN values. Replacing values")
+                    logger.warning(
+                        f"Img {output_file_path} has NaN values. Replacing values"
+                    )
                     res_cams = np.nan_to_num(res_cams, nan=0.5)
                 np.save(output_file_path, res_cams)
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Generate and store score CAM heatmaps')
-    parser.add_argument(
-        "--model", help="model name", required=True
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Generate and store score CAM heatmaps"
     )
-    parser.add_argument(
-        "--input", help="Path to dataset", required=True
-    )
+    parser.add_argument("--model", help="model name", required=True)
+    parser.add_argument("--input", help="Path to dataset", required=True)
     parser.add_argument(
         "--output", help="Path to store generated heatmaps", required=True
     )
@@ -207,38 +254,29 @@ if __name__ == '__main__':
         "--target_layer", help="Target layer for CAM", type=int, required=False
     )
     parser.add_argument(
-        "--batch_size", help="Batch size for calculating cam maps", type=int, required=True
+        "--batch_size",
+        help="Batch size for calculating cam maps",
+        type=int,
+        required=True,
     )
+    parser.add_argument("--mix_layers", action="store_true", default=False)
+    parser.add_argument("--include_first", action="store_true", default=False)
+    parser.add_argument("--eigen_smooth", action="store_true", default=False)
+    parser.add_argument("--device", default="cuda:1")
+    parser.add_argument("--saliency_type", required=True)
     parser.add_argument(
-        "--mix_layers", action='store_true', default=False
+        "--target_dim",
+        type=int,
     )
+    parser.add_argument("--patch_cam", action="store_true", default=False)
+    parser.add_argument("--multires", action="store_true", default=False)
+    parser.add_argument("--no_classes", type=int, default=1000)
     parser.add_argument(
-        "--include_first", action='store_true', default=False
-    )
-    parser.add_argument(
-        "--eigen_smooth", action='store_true', default=False
-
-    )
-    parser.add_argument(
-        "--device", default='cuda:1'
-    )
-    parser.add_argument(
-        "--saliency_type", required=True
-    )
-    parser.add_argument(
-        "--target_dim", type=int,
-    )
-    parser.add_argument(
-        "--patch_cam", action='store_true', default=False
-    )
-    parser.add_argument(
-        "--multires", action='store_true', default=False
-    )
-    parser.add_argument(
-        "--no_classes", type=int, default=1000
-    )
-    parser.add_argument(
-        "weights_path", type=str, default=None
+        "--weights_path",
+        type=str,
+        default=None,
+        required=False,
+        help="path to custom weights for backbone",
     )
     args = parser.parse_args()
     generate_score_cam_attn_maps(args)

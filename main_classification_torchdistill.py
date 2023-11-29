@@ -8,6 +8,7 @@ from torch import distributed as dist
 from torch.backends import cudnn
 from torch.utils.data import DataLoader
 
+
 from torchdistill.common import file_util, yaml_util, module_util
 from torchdistill.common.constant import def_logger
 from torchdistill.common.main_util import is_main_process, init_distributed_mode, load_ckpt, save_ckpt, set_seed
@@ -27,6 +28,8 @@ from torchvision.transforms import transforms
 # todo: clean this mess
 from torchinfo import summary
 
+from model.modules.analysis import QuantizableSimpleAnalysisNetwork2
+from model.modules.timm_models import get_timm_model
 from saliency_maps.cam_loaders import ImageFolderWithPrecomputedCAMMap
 from misc.loss import BppLossOrig
 from misc.eval import evaluate_accuracy, get_eval_metric
