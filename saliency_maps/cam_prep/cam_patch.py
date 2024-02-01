@@ -27,18 +27,20 @@ try:
     import cupy as cp
 
     def get_2d_projection(activation_batch):
-        with cp.cuda.Device(1):
+        with cp.cuda.Device(0):  # todo: make configurable
             activation_batch = cp.asarray(activation_batch)
             # TBD: use pytorch batch svd implementation
             activation_batch[cp.isnan(activation_batch)] = 0
             projections = []
             for activations in activation_batch:
-                reshaped_activations = (activations).reshape(
-                    activations.shape[0], -1).transpose()
+                reshaped_activations = (
+                    (activations).reshape(activations.shape[0], -1).transpose()
+                )
                 # Centering before the SVD seems to be important here,
                 # Otherwise the image returned is negative
-                reshaped_activations = reshaped_activations - \
-                    reshaped_activations.mean(axis=0)
+                reshaped_activations = reshaped_activations - reshaped_activations.mean(
+                    axis=0
+                )
                 U, S, VT = cp.linalg.svd(reshaped_activations, full_matrices=True)
                 projection = reshaped_activations @ VT[0, :]
                 projection = projection.reshape(activations.shape[1:])
@@ -48,9 +50,12 @@ try:
                 del projection
             del projections
         return res
+
     pytorch_grad_cam.utils.get_2d_projection = pytorch_grad_cam.utils.get_2d_projection
 except Exception as e:
-    logger.warning(f"Could not import cupy: {e}\n Map generation will be very slow with Some options")
+    logger.warning(
+        f"Could not import cupy: {e}\n Map generation will be very slow with some options"
+    )
 
 
 class GuidedBackpropReLUModel:
@@ -317,10 +322,30 @@ class XGradCAM_(BaseCAM_):
         return weights
 
 
-class GradCAMPlusPlus_(BaseCAM_):
-    def __init__(
-        self, model, target_layers, device, reshape_transform=None
+class EigenCAM_(BaseCAM_):
+    def __init__(self, model, target_layers, device, reshape_transform=None):
+        super().__init__(
+            model=model,
+            target_layers=target_layers,
+            device=device,
+            reshape_transform=reshape_transform,
+            uses_gradients=False,
+        )
+
+    def get_cam_image(
+        self,
+        input_tensor,
+        target_layer,
+        target_category,
+        activations,
+        grads,
+        eigen_smooth,
     ):
+        return pytorch_grad_cam.utils.get_2d_projection(activations)
+
+
+class GradCAMPlusPlus_(BaseCAM_):
+    def __init__(self, model, target_layers, device, reshape_transform=None):
         super(GradCAMPlusPlus_, self).__init__(
             model=model,
             target_layers=target_layers,
@@ -351,6 +376,8 @@ class GradCAMPlusPlus_(BaseCAM_):
 pytorch_grad_cam.base_cam = BaseCAM_
 pytorch_grad_cam.XGradCAM = XGradCAM_
 pytorch_grad_cam.GradCAMPlusPlus = GradCAMPlusPlus_
+pytorch_grad_cam.EigenCAM = EigenCAM_
+
 
 def patched_scale_cam_image(cam, target_size=None, interpolation=cv2.INTER_LANCZOS4):
     result = []

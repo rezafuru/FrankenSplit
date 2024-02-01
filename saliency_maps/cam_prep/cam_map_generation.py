@@ -4,6 +4,9 @@ import sys
 from typing import Any, Tuple
 
 import timm
+from PIL import Image
+from torch import nn
+from torchvision.models import segmentation
 
 from saliency_maps.cam_prep.cam_patch import apply_cam_patches, apply_multires_patches
 from timm.models.layers import to_2tuple
@@ -11,7 +14,7 @@ import torch
 import torch.cuda
 import numpy as np
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchdistill.common.constant import def_logger
 from pytorch_grad_cam import (
     EigenCAM,
@@ -46,6 +49,57 @@ SALIENCY_TYPES = {
     "ScoreCAM": ScoreCAM,
     "EigenCAM": EigenCAM,
 }
+
+
+class SegWrapper(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x):
+        return self.model(x)["out"]
+
+
+class SegTarget:
+    def __init__(self, category, mask, device):
+        self.category = category
+        self.mask = torch.from_numpy(mask).to(device)
+
+    def __call__(self, model_output):
+        return (model_output[self.category, :, :] * self.mask).sum()
+
+class ImageFolderSingleClassFolder(Dataset):
+    def __init__(
+        self, root, transform=None, target_transform=None, split=None, *args, **kwargs
+    ):
+        root = os.path.expanduser(root)
+        if split:
+            root = Path(root) / split
+        else:
+            root = Path(root)
+
+        # store paths to all files in the directory
+        self.samples = [str(f) for f in root.iterdir() if f.is_file()]
+
+        self.transform = transform or nn.Identity()
+        self.target_transform = target_transform or nn.Identity()
+
+    def __getitem__(self, index):
+        """
+        Args:
+            index (int): Index
+
+        Returns:
+            img: `PIL.Image.Image` or transformed `PIL.Image.Image`.
+        """
+        path = Path(self.samples[index])
+        img_name = path.stem
+        sample = self.transform(Image.open(self.samples[index]).convert("RGB"))
+
+        return sample, [], "", img_name
+
+    def __len__(self):
+        return len(self.samples)
 
 
 class ImageFolderReturningClassFolder(ImageFolder):
@@ -113,34 +167,61 @@ def generate_score_cam_attn_maps(args):
     multires = args.multires
     weights_path = args.weights_path
     no_classes = args.no_classes
-    assert multires or not args.target_layer
-    assert not (multires and args.target_dim)
-    assert not multires or (args.patch_cam and not args.include_first)
     device = args.device
 
-    model = get_timm_model(
-        args.model,
-        pretrained=False,
-        no_classes=no_classes,
-        assign_layer_names=False,
-        split_idx=-1,
-        weights_path=weights_path,
-    )
+    if args.task == "classification":
+        model = get_timm_model(
+            args.model,
+            pretrained=False,
+            no_classes=no_classes,
+            assign_layer_names=False,
+            split_idx=-1,
+            weights_path=weights_path,
+        )
+    elif args.task == "detection":
+        if "yolo" in args.model:
+            model = torch.hub.load("ultralytics/yolov5", args.model, pretrained=True)
+    else:
+        model = segmentation.__dict__[args.model]
+
     # todo: pass transforms as config
-    transform_list = transforms.Compose(
-        [
-            Resize(size=[256, 256]),
-            CenterCrop(size=[224, 224]),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
+    transform_list = (
+        transforms.Compose(
+            [
+                Resize(
+                    size=[256, 256], antialias=True
+                ),  # default = True for PIL anyway, but bless torchvision warnings
+                CenterCrop(size=[224, 224]),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
+            ]
+        )
+        if not "yolo" in args.model
+        else transforms.Compose(
+            [
+                transforms.Resize(
+                    size=[320, 320],  # default ultralytics imgsz for COCO
+                    antialias=True,
+                ),
+                transforms.ToTensor(),
+            ]
+        )  # rest in ultralytics pipeline
     )
-    dataset = ImageFolderReturningClassFolder(
-        root=args.input,
-        transform=transform_list,
+    dataset = (
+        ImageFolderReturningClassFolder(
+            root=args.input,
+            transform=transform_list,
+        )
+        if args.task == "classification"
+        else ImageFolderSingleClassFolder(root=args.input, transform=transform_list)
     )
     loader = DataLoader(
-        dataset=dataset, batch_size=args.batch_size, shuffle=False, num_workers=2
+        dataset=dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=0,  # because jetbrains hates DL/torch apparently
     )
     model.to(device)
     root_output = args.output
@@ -173,6 +254,13 @@ def generate_score_cam_attn_maps(args):
                 model.layer1[-1],
                 model.layer2[-1],
                 model.layer3[-1],
+            ]
+        elif "yolo" in args.model:
+            # targeting "C3" layers between highway connections
+            target_layers = [
+                model.model.model.model[8],
+                model.model.model.model[13],
+                model.model.model.model[17],
             ]
         else:
             logger.warning(f"Layer selection for {args.model} not implemented")
@@ -211,8 +299,11 @@ def generate_score_cam_attn_maps(args):
                 mkdir(output_path)
                 output_paths.append(output_path)
         samples.to(device)
-        labels.to(device)
-        targets = [ClassifierOutputTarget(label.item()) for label in labels]
+        if isinstance(labels, torch.Tensor):
+            labels = labels.to(device)
+            targets = [ClassifierOutputTarget(label.item()) for label in labels]
+        else:
+            targets = None
         grayscale_cams = cam(
             input_tensor=torch.autograd.Variable(
                 samples.detach().clone(), requires_grad=True
@@ -238,7 +329,17 @@ def generate_score_cam_attn_maps(args):
                         f"Img {output_file_path} has NaN values. Replacing values"
                     )
                     res_cams = np.nan_to_num(res_cams, nan=0.5)
+                # assert res_cams.shape == (320, 320)
                 np.save(output_file_path, res_cams)
+
+
+def _validate_args(args):
+    assert args.task in ["classification", "detection", "segmentation"], "Invalid task"
+    assert args.multires or not args.target_layer
+    assert not (args.multires and args.target_dim)
+    assert not args.multires or (args.patch_cam and not args.include_first)
+    if args.task!= "classification":
+        logger.warning("Currently only rudimentary implementation for non-classification task")
 
 
 if __name__ == "__main__":
@@ -246,6 +347,12 @@ if __name__ == "__main__":
         description="Generate and store score CAM heatmaps"
     )
     parser.add_argument("--model", help="model name", required=True)
+    parser.add_argument(
+        "--task",
+        default="classification",
+        help="Task name [classification (default), detection, segmentation]",
+        required=True,
+    )
     parser.add_argument("--input", help="Path to dataset", required=True)
     parser.add_argument(
         "--output", help="Path to store generated heatmaps", required=True
@@ -262,7 +369,7 @@ if __name__ == "__main__":
     parser.add_argument("--mix_layers", action="store_true", default=False)
     parser.add_argument("--include_first", action="store_true", default=False)
     parser.add_argument("--eigen_smooth", action="store_true", default=False)
-    parser.add_argument("--device", default="cuda:1")
+    parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--saliency_type", required=True)
     parser.add_argument(
         "--target_dim",
@@ -279,4 +386,5 @@ if __name__ == "__main__":
         help="path to custom weights for backbone",
     )
     args = parser.parse_args()
+    _validate_args(args)
     generate_score_cam_attn_maps(args)
