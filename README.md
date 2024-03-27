@@ -1,7 +1,9 @@
 # FrankenSplit
 
-Repository for the paper on FrankenSplit: Efficient Neural Feature Compression with Shallow Variational Bottleneck
+Official Repository for the paper on FrankenSplit: Efficient Neural Feature Compression with Shallow Variational Bottleneck
 Injection for Mobile Edge Computing
+
+If you find this work interesting, please check the [follow up ](https://github.com/rezafuru/the-fool)
 
 ## Setup
 
@@ -57,7 +59,7 @@ To test with pre-trained weights: `python main_classification_torchdistill.py --
 
 # Citation
 
-[[Preprint]](https://arxiv.org/abs/2302.10681)
+[[IEEE]](https://ieeexplore.ieee.org/document/10480247) [[Preprint]](https://arxiv.org/abs/2302.10681)
 
 ```bibtex
 @misc{furutanpey2023frankensplit,
@@ -66,7 +68,7 @@ To test with pre-trained weights: `python main_classification_torchdistill.py --
       year={2023},
       eprint={2302.10681},
       archivePrefix={arXiv},
-      primaryClass={eess.IV}
+      primaryClass={eess.IV}](https://ieeexplore.ieee.org/document/10480247)
 }
 ```
 
