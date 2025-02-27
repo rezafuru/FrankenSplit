@@ -62,13 +62,16 @@ To test with pre-trained weights: `python main_classification_torchdistill.py --
 [[IEEE]](https://ieeexplore.ieee.org/document/10480247) [[Preprint]](https://arxiv.org/abs/2302.10681)
 
 ```bibtex
-@misc{furutanpey2023frankensplit,
-      title={FrankenSplit: Efficient Neural Feature Compression with Shallow Variational Bottleneck Injection for Mobile Edge Computing}, 
-      author={Alireza Furutanpey and Philipp Raith and Schahram Dustdar},
-      year={2023},
-      eprint={2302.10681},
-      archivePrefix={arXiv},
-      primaryClass={eess.IV}](https://ieeexplore.ieee.org/document/10480247)
+@ARTICLE{10480247,
+  author={Furutanpey, Alireza and Raith, Philipp and Dustdar, Schahram},
+  journal={IEEE Transactions on Mobile Computing}, 
+  title={FrankenSplit: Efficient Neural Feature Compression With Shallow Variational Bottleneck Injection for Mobile Edge Computing}, 
+  year={2024},
+  volume={23},
+  number={12},
+  pages={10770-10786},
+  keywords={Runtime;Computational modeling;Load modeling;Task analysis;Bandwidth;Servers;Image coding;Split computing;distributed inference;edge computing;edge intelligence;learned image compression;data compression;neural data compression;feature compression;knowledge distillation},
+  doi={10.1109/TMC.2024.3381952}
 }
 ```
 
