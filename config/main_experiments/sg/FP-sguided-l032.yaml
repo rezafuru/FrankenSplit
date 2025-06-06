@@ -35,14 +35,20 @@ datasets:
         params:
           root: !join [ *root_dir_st2, '/train' ]
           transform_params:
-            - type: 'RandomResizedCrop'
+            - type: 'Resize'
               params:
-                size: *input_size
-            - type: 'RandomHorizontalFlip'
+                size: [256, 256]
+            - type: 'CenterCrop'
               params:
-                p: 0.5
-            - *totensor
-            - *normalize
+                size: &input_size [224, 224]
+            - &totensor
+              type: 'ToTensor'
+              params:
+            - &normalize
+              type: 'Normalize'
+              params:
+                mean: [ 0.485, 0.456, 0.406 ]
+                std: [ 0.229, 0.224, 0.225 ]
   ilsvrc2012_val:
     name: *dataset_name
     type: 'ImageFolder'
