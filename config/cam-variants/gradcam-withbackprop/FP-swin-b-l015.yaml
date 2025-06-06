@@ -313,7 +313,7 @@ train:
           criterion:
             type: 'MSELossWithPrecomputedCAMMapSingle'
             params:
-              strategy: 'mult_avg'
+              mode: 'mult_avg'
               tokenize: True
               interpol_to: [14, 14]
           params:

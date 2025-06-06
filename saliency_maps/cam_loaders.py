@@ -75,11 +75,11 @@ class ImageFolderWithPrecomputedCAMMap(ImageFolder):
         )
         self.map_loader = numpy_loader_2d
         self.to_tensor = transforms.ToTensor()
-        # self.joint_transform = transforms.RandomApply([get_transform(j_transf['type'], **j_transf['params']) for j_transf in joint_transform], p=1.0)
-        # if joint_transform:
-        #     self.joint_transform = get_transform(joint_transform[0]['type'], **joint_transform[0]['params'])
-        # else:
-        #     self.joint_transform = nn.Identity()
+        self.joint_transform = transforms.RandomApply([get_transform(j_transf['type'], **j_transf['params']) for j_transf in joint_transform], p=1.0)
+        if joint_transform:
+            self.joint_transform = get_transform(joint_transform[0]['type'], **joint_transform[0]['params'])
+        else:
+            self.joint_transform = nn.Identity()
         self.include_label = include_label
         self.map_with_sample = map_wtih_sample
         self.include_orig_img = include_orig_img

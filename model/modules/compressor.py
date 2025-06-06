@@ -349,7 +349,7 @@ class FactorizedPriorModuleWithCamEB(CompressionModule):
             _, y_cam_likelihoods = self.eb_cam(cam_map_features)
             x_hat = self.g_s(y_hat)
             if self.return_map_features:
-                return x_hat, self.cam_net_synth(cam_map_features)
+                return x_hat, cam_map_features
             return x_hat
         y = self.g_a(x)
         y_hat, y_likelihoods = self.entropy_bottleneck(y)
