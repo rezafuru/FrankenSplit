@@ -40,15 +40,9 @@ datasets:
                 size: [256, 256]
             - type: 'CenterCrop'
               params:
-                size: &input_size [224, 224]
-            - &totensor
-              type: 'ToTensor'
-              params:
-            - &normalize
-              type: 'Normalize'
-              params:
-                mean: [ 0.485, 0.456, 0.406 ]
-                std: [ 0.229, 0.224, 0.225 ]
+                size: *input_size
+            - *totensor
+            - *normalize
   ilsvrc2012_val:
     name: *dataset_name
     type: 'ImageFolder'
