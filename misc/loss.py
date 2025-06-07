@@ -264,6 +264,9 @@ class MSELossMultiresCAM(nn.Module):
 
 @register_single_loss
 class MSELossWithPrecomputedCAMMapSingle(nn.Module):
+    @staticmethod
+    def _mult(d, s_map):
+        return torch.mul(d, s_map)
 
     @staticmethod
     def _mult_avg(d, s_map):
